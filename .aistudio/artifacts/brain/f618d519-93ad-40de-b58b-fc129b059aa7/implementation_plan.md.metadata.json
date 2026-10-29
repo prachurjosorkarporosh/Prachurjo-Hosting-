@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for Prachurjo Host, a multi-tenant static website hosting and publishing platform with an administrator-controlled coin economy, online code editor, ZIP/HTML upload validation, custom domain & path routing, bilingual English/বাংলা interface, and Firebase Auth + Firestore persistence.",
+  "updatedAt":  "2026-10-29T00:00:52.824346796Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

@@ -1,0 +1,536 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitive Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'prachurjosorkarporosh@gmail.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN' &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'ACTIVE')
+      );
+    }
+
+    // Validation Blueprints
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'username', 'email', 'displayName', 'photoURL', 'role', 'status', 'storageQuotaBytes', 'storageUsedBytes', 'twoFactorEnabled', 'emailVerified', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'username', 'email', 'displayName', 'photoURL', 'role', 'status', 'storageQuotaBytes', 'storageUsedBytes', 'twoFactorEnabled', 'emailVerified', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.username is string && data.username.size() >= 3 && data.username.size() <= 32 && data.username.matches('^[a-z0-9_\\-]+$') &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        data.photoURL is string && data.photoURL.size() <= 500 &&
+        data.role is string && (data.role == 'USER' || data.role == 'ADMIN') &&
+        data.status is string && (data.status == 'ACTIVE' || data.status == 'SUSPENDED') &&
+        data.storageQuotaBytes is int && data.storageQuotaBytes >= 0 && data.storageQuotaBytes <= 1073741824 &&
+        data.storageUsedBytes is int && data.storageUsedBytes >= 0 && data.storageUsedBytes <= 1073741824 &&
+        data.twoFactorEnabled is bool &&
+        data.emailVerified is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWebsite(data) {
+      return data.keys().hasAll(['id', 'userId', 'ownerUsername', 'name', 'slug', 'description', 'visibility', 'entryFile', 'status', 'primaryHostname', 'storageBytes', 'publishedVersionId', 'currentVersionNumber', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'ownerUsername', 'name', 'slug', 'description', 'visibility', 'entryFile', 'status', 'primaryHostname', 'storageBytes', 'publishedVersionId', 'currentVersionNumber', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerUsername is string && data.ownerUsername.size() >= 1 && data.ownerUsername.size() <= 32 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.slug is string && data.slug.size() >= 3 && data.slug.size() <= 48 && data.slug.matches('^[a-z0-9\\-]+$') &&
+        data.description is string && data.description.size() <= 500 &&
+        data.visibility is string && (data.visibility == 'PUBLIC' || data.visibility == 'UNLISTED') &&
+        data.entryFile is string && data.entryFile.size() >= 1 && data.entryFile.size() <= 120 &&
+        data.status is string && (data.status == 'DRAFT' || data.status == 'QUEUED' || data.status == 'PUBLISHING' || data.status == 'PUBLISHED' || data.status == 'FAILED' || data.status == 'SUSPENDED' || data.status == 'ARCHIVED') &&
+        data.primaryHostname is string && data.primaryHostname.size() >= 3 && data.primaryHostname.size() <= 160 &&
+        data.storageBytes is int && data.storageBytes >= 0 && data.storageBytes <= 104857600 &&
+        data.publishedVersionId is string && data.publishedVersionId.size() <= 128 &&
+        data.currentVersionNumber is int && data.currentVersionNumber >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDomain(data) {
+      return data.keys().hasAll(['id', 'websiteId', 'userId', 'hostname', 'domainType', 'verificationStatus', 'verificationToken', 'isPrimary', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'websiteId', 'userId', 'hostname', 'domainType', 'verificationStatus', 'verificationToken', 'isPrimary', 'createdAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.websiteId is string && data.websiteId.size() >= 1 && data.websiteId.size() <= 128 && data.websiteId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.hostname is string && data.hostname.size() >= 4 && data.hostname.size() <= 160 &&
+        data.domainType is string && (data.domainType == 'SUBDOMAIN' || data.domainType == 'CUSTOM') &&
+        data.verificationStatus is string && (data.verificationStatus == 'VERIFIED' || data.verificationStatus == 'PENDING' || data.verificationStatus == 'FAILED') &&
+        data.verificationToken is string && data.verificationToken.size() <= 128 &&
+        data.isPrimary is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidWebsiteVersion(data) {
+      return data.keys().hasAll(['id', 'websiteId', 'userId', 'versionNumber', 'storagePrefix', 'deploymentStatus', 'fileCount', 'totalBytes', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'websiteId', 'userId', 'versionNumber', 'storagePrefix', 'deploymentStatus', 'fileCount', 'totalBytes', 'createdAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.websiteId is string && data.websiteId.size() >= 1 && data.websiteId.size() <= 128 && data.websiteId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.versionNumber is int && data.versionNumber >= 1 &&
+        data.storagePrefix is string && data.storagePrefix.size() >= 1 && data.storagePrefix.size() <= 200 &&
+        data.deploymentStatus is string && (data.deploymentStatus == 'PUBLISHED' || data.deploymentStatus == 'SUPERSEDED' || data.deploymentStatus == 'FAILED') &&
+        data.fileCount is int && data.fileCount >= 0 && data.fileCount <= 200 &&
+        data.totalBytes is int && data.totalBytes >= 0 && data.totalBytes <= 104857600 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidStorageObject(data) {
+      return data.keys().hasAll(['id', 'userId', 'websiteId', 'versionId', 'objectKey', 'fileName', 'mimeType', 'sizeBytes', 'content', 'isPublic', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'websiteId', 'versionId', 'objectKey', 'fileName', 'mimeType', 'sizeBytes', 'content', 'isPublic', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.websiteId is string && data.websiteId.size() >= 1 && data.websiteId.size() <= 128 && data.websiteId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.versionId is string && data.versionId.size() >= 1 && data.versionId.size() <= 128 &&
+        data.objectKey is string && data.objectKey.size() >= 1 && data.objectKey.size() <= 240 &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 120 &&
+        data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 80 &&
+        data.sizeBytes is int && data.sizeBytes >= 0 && data.sizeBytes <= 5242880 &&
+        data.content is string && data.content.size() <= 500000 &&
+        data.isPublic is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCoinWallet(data) {
+      return data.keys().hasAll(['userId', 'balance', 'totalEarned', 'totalSpent', 'lastDailyRewardAt', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'balance', 'totalEarned', 'totalSpent', 'lastDailyRewardAt', 'updatedAt']) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.balance is int && data.balance >= 0 && data.balance <= 100000000 &&
+        data.totalEarned is int && data.totalEarned >= 0 && data.totalEarned <= 100000000 &&
+        data.totalSpent is int && data.totalSpent >= 0 && data.totalSpent <= 100000000 &&
+        data.lastDailyRewardAt is string && data.lastDailyRewardAt.size() <= 64 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCoinTransaction(data) {
+      return data.keys().hasAll(['id', 'userId', 'amount', 'balanceAfter', 'transactionType', 'referenceId', 'idempotencyKey', 'description', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'amount', 'balanceAfter', 'transactionType', 'referenceId', 'idempotencyKey', 'description', 'createdAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.amount is int && data.amount >= -1000000 && data.amount <= 1000000 &&
+        data.balanceAfter is int && data.balanceAfter >= 0 && data.balanceAfter <= 100000000 &&
+        data.transactionType is string && (
+          data.transactionType == 'REGISTRATION_BONUS' ||
+          data.transactionType == 'DAILY_REWARD' ||
+          data.transactionType == 'WEBSITE_PUBLISH' ||
+          data.transactionType == 'WEBSITE_RENAME' ||
+          data.transactionType == 'DOMAIN_CHANGE' ||
+          data.transactionType == 'STORAGE_UPGRADE' ||
+          data.transactionType == 'REDEEM_REWARD' ||
+          data.transactionType == 'ADMIN_CREDIT' ||
+          data.transactionType == 'ADMIN_DEBIT' ||
+          data.transactionType == 'REFUND'
+        ) &&
+        data.referenceId is string && data.referenceId.size() <= 128 &&
+        data.idempotencyKey is string && data.idempotencyKey.size() >= 1 && data.idempotencyKey.size() <= 128 &&
+        data.description is string && data.description.size() >= 1 && data.description.size() <= 240 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidRedeemCode(data) {
+      return data.keys().hasAll(['id', 'code', 'codeHash', 'coinAmount', 'maxRedemptions', 'perUserLimit', 'currentRedemptions', 'expiresAt', 'isActive', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'code', 'codeHash', 'coinAmount', 'maxRedemptions', 'perUserLimit', 'currentRedemptions', 'expiresAt', 'isActive', 'createdAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.code is string && data.code.size() >= 4 && data.code.size() <= 40 &&
+        data.codeHash is string && data.codeHash.size() >= 4 && data.codeHash.size() <= 128 &&
+        data.coinAmount is int && data.coinAmount >= 1 && data.coinAmount <= 1000000 &&
+        data.maxRedemptions is int && data.maxRedemptions >= 1 && data.maxRedemptions <= 1000000 &&
+        data.perUserLimit is int && data.perUserLimit >= 1 && data.perUserLimit <= 100 &&
+        data.currentRedemptions is int && data.currentRedemptions >= 0 && data.currentRedemptions <= data.maxRedemptions &&
+        data.expiresAt is string && data.expiresAt.size() <= 64 &&
+        data.isActive is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidRedeemRedemption(data) {
+      return data.keys().hasAll(['id', 'redeemCodeId', 'code', 'userId', 'coinAmount', 'coinTransactionId', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'redeemCodeId', 'code', 'userId', 'coinAmount', 'coinTransactionId', 'createdAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.redeemCodeId is string && data.redeemCodeId.size() >= 1 && data.redeemCodeId.size() <= 128 && data.redeemCodeId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.code is string && data.code.size() >= 4 && data.code.size() <= 40 &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.coinAmount is int && data.coinAmount >= 1 && data.coinAmount <= 1000000 &&
+        data.coinTransactionId is string && data.coinTransactionId.size() >= 1 && data.coinTransactionId.size() <= 128 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'message', 'category', 'isRead', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'title', 'message', 'category', 'isRead', 'createdAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 400 &&
+        data.category is string && (data.category == 'PUBLISH' || data.category == 'WALLET' || data.category == 'SECURITY' || data.category == 'DOMAIN' || data.category == 'SYSTEM') &&
+        data.isRead is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidAdminAuditLog(data) {
+      return data.keys().hasAll(['id', 'adminUserId', 'adminEmail', 'action', 'targetType', 'targetId', 'reason', 'metadataSummary', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'adminUserId', 'adminEmail', 'action', 'targetType', 'targetId', 'reason', 'metadataSummary', 'createdAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.adminUserId is string && data.adminUserId.size() >= 1 && data.adminUserId.size() <= 128 && data.adminUserId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.adminEmail is string && data.adminEmail.size() >= 3 && data.adminEmail.size() <= 254 &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
+        data.targetType is string && data.targetType.size() >= 1 && data.targetType.size() <= 40 &&
+        data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+        data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 400 &&
+        data.metadataSummary is string && data.metadataSummary.size() <= 500 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidPlatformSettings(data) {
+      return data.keys().hasAll(['platformName', 'registrationEnabled', 'maintenanceMode', 'publishingEnabled', 'coinSystemEnabled', 'maxWebsitesPerUser', 'uploadSizeLimitMb', 'defaultStorageQuotaBytes', 'registrationBonusCoins', 'publishPriceCoins', 'renamePriceCoins', 'domainChangePriceCoins', 'dailyRewardCoins', 'storageUpgradePriceCoins', 'updatedAt']) &&
+        data.keys().hasOnly(['platformName', 'registrationEnabled', 'maintenanceMode', 'publishingEnabled', 'coinSystemEnabled', 'maxWebsitesPerUser', 'uploadSizeLimitMb', 'defaultStorageQuotaBytes', 'registrationBonusCoins', 'publishPriceCoins', 'renamePriceCoins', 'domainChangePriceCoins', 'dailyRewardCoins', 'storageUpgradePriceCoins', 'updatedAt']) &&
+        data.platformName is string && data.platformName.size() >= 1 && data.platformName.size() <= 80 &&
+        data.registrationEnabled is bool &&
+        data.maintenanceMode is bool &&
+        data.publishingEnabled is bool &&
+        data.coinSystemEnabled is bool &&
+        data.maxWebsitesPerUser is int && data.maxWebsitesPerUser >= 1 && data.maxWebsitesPerUser <= 500 &&
+        data.uploadSizeLimitMb is int && data.uploadSizeLimitMb >= 1 && data.uploadSizeLimitMb <= 100 &&
+        data.defaultStorageQuotaBytes is int && data.defaultStorageQuotaBytes >= 1048576 && data.defaultStorageQuotaBytes <= 1073741824 &&
+        data.registrationBonusCoins is int && data.registrationBonusCoins >= 0 && data.registrationBonusCoins <= 100000 &&
+        data.publishPriceCoins is int && data.publishPriceCoins >= 0 && data.publishPriceCoins <= 100000 &&
+        data.renamePriceCoins is int && data.renamePriceCoins >= 0 && data.renamePriceCoins <= 100000 &&
+        data.domainChangePriceCoins is int && data.domainChangePriceCoins >= 0 && data.domainChangePriceCoins <= 100000 &&
+        data.dailyRewardCoins is int && data.dailyRewardCoins >= 0 && data.dailyRewardCoins <= 100000 &&
+        data.storageUpgradePriceCoins is int && data.storageUpgradePriceCoins >= 0 && data.storageUpgradePriceCoins <= 100000 &&
+        data.updatedAt is timestamp;
+    }
+
+    // 1. /users/{userId}
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUser(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().status == 'ACTIVE' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          incoming().role == 'USER' ||
+          (incoming().role == 'ADMIN' && request.auth.token.email_verified == true && request.auth.token.email == 'prachurjosorkarporosh@gmail.com')
+        );
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            request.auth.uid == userId &&
+            existing().status == 'ACTIVE' &&
+            incoming().role == existing().role &&
+            incoming().status == existing().status &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'photoURL', 'storageQuotaBytes', 'storageUsedBytes', 'twoFactorEnabled', 'emailVerified', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // 2. /websites/{websiteId}
+    match /websites/{websiteId} {
+      allow get: if isValidId(websiteId) && (
+        existing().status == 'PUBLISHED' ||
+        (isSignedIn() && (existing().userId == request.auth.uid || isAdmin()))
+      );
+      allow list: if existing().status == 'PUBLISHED' || (isSignedIn() && (existing().userId == request.auth.uid || isAdmin()));
+      allow create: if isSignedIn() &&
+        isValidId(websiteId) &&
+        isValidWebsite(incoming()) &&
+        incoming().id == websiteId &&
+        incoming().userId == request.auth.uid &&
+        incoming().status == 'DRAFT' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow update: if isSignedIn() &&
+        isValidId(websiteId) &&
+        isValidWebsite(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid &&
+            existing().status != 'SUSPENDED' &&
+            incoming().status != 'SUSPENDED' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'slug', 'description', 'visibility', 'entryFile', 'status', 'primaryHostname', 'storageBytes', 'publishedVersionId', 'currentVersionNumber', 'updatedAt'])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(websiteId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 3. /domains/{domainId}
+    match /domains/{domainId} {
+      allow get: if isValidId(domainId) && (isSignedIn() || existing().verificationStatus == 'VERIFIED');
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin() || existing().verificationStatus == 'VERIFIED');
+      allow create: if isSignedIn() &&
+        isValidId(domainId) &&
+        isValidDomain(incoming()) &&
+        incoming().id == domainId &&
+        incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/websites/$(incoming().websiteId)) &&
+        get(/databases/$(database)/documents/websites/$(incoming().websiteId)).data.userId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        isValidId(domainId) &&
+        isValidDomain(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().userId == existing().userId &&
+        incoming().websiteId == existing().websiteId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['verificationStatus', 'isPrimary'])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(domainId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 4. /website_versions/{versionId}
+    match /website_versions/{versionId} {
+      allow get: if isValidId(versionId) && (
+        existing().deploymentStatus == 'PUBLISHED' ||
+        (isSignedIn() && (existing().userId == request.auth.uid || isAdmin()))
+      );
+      allow list: if existing().deploymentStatus == 'PUBLISHED' || (isSignedIn() && (existing().userId == request.auth.uid || isAdmin()));
+      allow create: if isSignedIn() &&
+        isValidId(versionId) &&
+        isValidWebsiteVersion(incoming()) &&
+        incoming().id == versionId &&
+        incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/websites/$(incoming().websiteId)) &&
+        get(/databases/$(database)/documents/websites/$(incoming().websiteId)).data.userId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        isValidId(versionId) &&
+        isValidWebsiteVersion(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().userId == existing().userId &&
+        incoming().websiteId == existing().websiteId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['deploymentStatus'])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(versionId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 5. /storage_objects/{objectId}
+    match /storage_objects/{objectId} {
+      allow get: if isValidId(objectId) && (
+        existing().isPublic == true ||
+        (isSignedIn() && (existing().userId == request.auth.uid || isAdmin()))
+      );
+      allow list: if existing().isPublic == true || (isSignedIn() && (existing().userId == request.auth.uid || isAdmin()));
+      allow create: if isSignedIn() &&
+        isValidId(objectId) &&
+        isValidStorageObject(incoming()) &&
+        incoming().id == objectId &&
+        incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/websites/$(incoming().websiteId)) &&
+        get(/databases/$(database)/documents/websites/$(incoming().websiteId)).data.userId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        isValidId(objectId) &&
+        isValidStorageObject(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().userId == existing().userId &&
+        incoming().websiteId == existing().websiteId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['fileName', 'mimeType', 'sizeBytes', 'content', 'isPublic', 'updatedAt'])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(objectId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 6. /coin_wallets/{userId}
+    match /coin_wallets/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidCoinWallet(incoming()) &&
+        incoming().userId == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        isValidCoinWallet(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            request.auth.uid == userId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['balance', 'totalEarned', 'totalSpent', 'lastDailyRewardAt', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // 7. /coin_transactions/{txId}
+    match /coin_transactions/{txId} {
+      allow get: if isSignedIn() && isValidId(txId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(txId) &&
+        isValidCoinTransaction(incoming()) &&
+        incoming().id == txId &&
+        incoming().createdAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            incoming().userId == request.auth.uid &&
+            incoming().transactionType != 'ADMIN_CREDIT' &&
+            incoming().transactionType != 'ADMIN_DEBIT' &&
+            existsAfter(/databases/$(database)/documents/coin_wallets/$(request.auth.uid))
+          )
+        );
+      allow update, delete: if false;
+    }
+
+    // 8. /redeem_codes/{codeId}
+    match /redeem_codes/{codeId} {
+      allow get: if isSignedIn() && isValidId(codeId);
+      allow list: if isAdmin() || (isSignedIn() && existing().isActive == true);
+      allow create: if isAdmin() &&
+        isValidId(codeId) &&
+        isValidRedeemCode(incoming()) &&
+        incoming().id == codeId &&
+        incoming().createdAt == request.time;
+      allow update: if isSignedIn() &&
+        isValidId(codeId) &&
+        isValidRedeemCode(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().code == existing().code &&
+        incoming().codeHash == existing().codeHash &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (
+            existing().isActive == true &&
+            incoming().currentRedemptions == existing().currentRedemptions + 1 &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['currentRedemptions'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(codeId);
+    }
+
+    // 9. /redeem_redemptions/{redemptionId}
+    match /redeem_redemptions/{redemptionId} {
+      allow get: if isSignedIn() && isValidId(redemptionId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(redemptionId) &&
+        isValidRedeemRedemption(incoming()) &&
+        incoming().id == redemptionId &&
+        incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/redeem_codes/$(incoming().redeemCodeId));
+      allow update, delete: if false;
+    }
+
+    // 10. /notifications/{notificationId}
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(notificationId) &&
+        isValidNotification(incoming()) &&
+        incoming().id == notificationId &&
+        incoming().createdAt == request.time &&
+        (incoming().userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() &&
+        isValidId(notificationId) &&
+        isValidNotification(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['isRead'])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(notificationId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 11. /admin_audit_logs/{logId}
+    match /admin_audit_logs/{logId} {
+      allow get: if isAdmin() && isValidId(logId);
+      allow list: if isAdmin() && existing().adminUserId is string;
+      allow create: if isAdmin() &&
+        isValidId(logId) &&
+        isValidAdminAuditLog(incoming()) &&
+        incoming().id == logId &&
+        incoming().adminUserId == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // 12. /platform_settings/{settingId}
+    match /platform_settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if existing().platformName is string;
+      allow create, update: if isAdmin() &&
+        isValidId(settingId) &&
+        isValidPlatformSettings(incoming()) &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+  }
+}

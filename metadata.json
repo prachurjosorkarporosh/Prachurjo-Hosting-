@@ -1,0 +1,6 @@
+{
+  "name": "Prachurjo Host",
+  "description": "Professional multi-tenant HTML/CSS/JS static website hosting and publishing platform with an administrator-controlled coin economy, online code editor, and custom domain routing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
