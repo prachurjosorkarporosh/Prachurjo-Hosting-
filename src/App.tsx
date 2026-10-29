@@ -522,13 +522,20 @@ export default function App() {
             onSuccess={async (prefUser) => {
               setAuthModalMode(null);
               if (auth.currentUser) {
-                const { profile: p, wallet: w } = await ensureUserInitialized(
-                  auth.currentUser,
-                  prefUser
-                );
-                setProfile(p);
-                setWallet(w);
-                setShowPublicLanding(false);
+                try {
+                  const { profile: p, wallet: w } = await ensureUserInitialized(
+                    auth.currentUser,
+                    prefUser
+                  );
+                  setProfile(p);
+                  setWallet(w);
+                  setEditDisplayName(p.displayName);
+                  setEditPhotoUrl(p.photoURL || '');
+                  setEditTwoFactor(Boolean(p.twoFactorEnabled));
+                  setShowPublicLanding(false);
+                } catch (err) {
+                  console.error('AuthModal user init error:', err);
+                }
               }
             }}
           />

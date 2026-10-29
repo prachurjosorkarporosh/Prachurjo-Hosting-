@@ -448,10 +448,10 @@ async function startServer() {
     return res.send(inlineSiteAssets(site, entryFile.content));
   });
 
-  app.get('/sites/:slug/*filePath', (req: Request, res: Response) => {
+  app.get('/sites/:slug/*', (req: Request, res: Response) => {
     const slug = String(req.params.slug || '').toLowerCase().trim();
-    const rawFileParam = (req.params as Record<string, string | string[]>).filePath;
-    const requestedFile = Array.isArray(rawFileParam) ? rawFileParam.join('/') : String(rawFileParam || '');
+    const rawWildcard = (req.params as Record<string, string | undefined>)[0] || '';
+    const requestedFile = String(rawWildcard).replace(/^\/+/, '');
 
     // Reject path traversal attempts
     if (requestedFile.includes('..') || requestedFile.startsWith('/')) {
@@ -504,7 +504,7 @@ async function startServer() {
   } else {
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
-    app.get('*all', (_req: Request, res: Response) => {
+    app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

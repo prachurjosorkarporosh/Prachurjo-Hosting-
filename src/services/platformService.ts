@@ -107,130 +107,183 @@ export async function createNotificationRecord(
   }
 }
 
+const inFlightUserInit = new Map<string, Promise<{ profile: UserProfile; wallet: CoinWallet }>>();
+
 export async function ensureUserInitialized(
   firebaseUser: User,
   preferredUsername?: string
 ): Promise<{ profile: UserProfile; wallet: CoinWallet }> {
   const uid = firebaseUser.uid;
-  const userRef = doc(db, 'users', uid);
-  const walletRef = doc(db, 'coin_wallets', uid);
-
-  try {
-    const [userSnap, walletSnap, settings] = await Promise.all([
-      getDoc(userRef),
-      getDoc(walletRef),
-      getOrInitPlatformSettings(),
-    ]);
-
-    const isBootstrapAdmin =
-      firebaseUser.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL && firebaseUser.emailVerified;
-
-    if (userSnap.exists() && walletSnap.exists()) {
-      const existingProfile = userSnap.data() as UserProfile;
-      const existingWallet = walletSnap.data() as CoinWallet;
-
-      // Sync published websites to Express edge router in background
-      syncUserPublishedWebsitesToEdge(uid).catch(() => {});
-
-      return { profile: existingProfile, wallet: existingWallet };
-    }
-
-    // Generate clean unique username
-    const rawBase =
-      preferredUsername ||
-      firebaseUser.email?.split('@')[0] ||
-      firebaseUser.displayName ||
-      `user_${uid.slice(0, 6)}`;
-    let cleanUsername = rawBase
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, '')
-      .slice(0, 24);
-    if (cleanUsername.length < 3) {
-      cleanUsername = `user_${uid.slice(0, 6).toLowerCase()}`;
-    }
-
-    const bonusCoins = settings.registrationBonusCoins ?? 100;
-    const txId = generateId('tx_reg');
-    const txRef = doc(db, 'coin_transactions', txId);
-
-    const newProfile: Omit<UserProfile, 'createdAt' | 'updatedAt'> = {
-      uid,
-      username: cleanUsername,
-      email: (firebaseUser.email || 'user@prachurjohost.com').slice(0, 254),
-      displayName: (firebaseUser.displayName || cleanUsername).slice(0, 80),
-      photoURL: (firebaseUser.photoURL || '').slice(0, 500),
-      role: isBootstrapAdmin ? 'ADMIN' : 'USER',
-      status: 'ACTIVE',
-      storageQuotaBytes: settings.defaultStorageQuotaBytes || 52428800,
-      storageUsedBytes: 0,
-      twoFactorEnabled: false,
-      emailVerified: Boolean(firebaseUser.emailVerified),
-    };
-
-    const newWallet: Omit<CoinWallet, 'updatedAt'> = {
-      userId: uid,
-      balance: bonusCoins,
-      totalEarned: bonusCoins,
-      totalSpent: 0,
-      lastDailyRewardAt: '',
-    };
-
-    await runTransaction(db, async (transaction) => {
-      const uCheck = await transaction.get(userRef);
-      if (!uCheck.exists()) {
-        transaction.set(userRef, {
-          ...newProfile,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-      const wCheck = await transaction.get(walletRef);
-      if (!wCheck.exists()) {
-        transaction.set(walletRef, {
-          ...newWallet,
-          updatedAt: serverTimestamp(),
-        });
-        transaction.set(txRef, {
-          id: txId,
-          userId: uid,
-          amount: bonusCoins,
-          balanceAfter: bonusCoins,
-          transactionType: 'REGISTRATION_BONUS',
-          referenceId: uid,
-          idempotencyKey: `reg_bonus_${uid}`,
-          description: `Welcome registration bonus (+${bonusCoins} coins)`,
-          createdAt: serverTimestamp(),
-        });
-      }
-    });
-
-    // If bootstrap admin and global settings not yet persisted, initialize global settings
-    if (isBootstrapAdmin) {
-      const settingsRef = doc(db, 'platform_settings', 'global');
-      const settingsSnap = await getDoc(settingsRef);
-      if (!settingsSnap.exists()) {
-        await setDoc(settingsRef, {
-          ...DEFAULT_PLATFORM_SETTINGS,
-          updatedAt: serverTimestamp(),
-        });
-      }
-    }
-
-    await createNotificationRecord(
-      uid,
-      'Welcome to Prachurjo Host',
-      `Your account is active and credited with ${bonusCoins} registration bonus coins.`,
-      'WALLET'
-    );
-
-    const [finalUser, finalWallet] = await Promise.all([getDoc(userRef), getDoc(walletRef)]);
-    return {
-      profile: finalUser.data() as UserProfile,
-      wallet: finalWallet.data() as CoinWallet,
-    };
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `users/${uid}`);
+  const existingPromise = inFlightUserInit.get(uid);
+  if (existingPromise) {
+    return existingPromise;
   }
+
+  const initPromise = (async (): Promise<{ profile: UserProfile; wallet: CoinWallet }> => {
+    const userRef = doc(db, 'users', uid);
+    const walletRef = doc(db, 'coin_wallets', uid);
+
+    try {
+      const [userSnap, walletSnap, settings] = await Promise.all([
+        getDoc(userRef),
+        getDoc(walletRef),
+        getOrInitPlatformSettings(),
+      ]);
+
+      const isBootstrapAdmin =
+        firebaseUser.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL && firebaseUser.emailVerified;
+
+      if (userSnap.exists() && walletSnap.exists()) {
+        let existingProfile = userSnap.data() as UserProfile;
+        const existingWallet = walletSnap.data() as CoinWallet;
+
+        if (isBootstrapAdmin && existingProfile.role !== 'ADMIN') {
+          await updateDoc(userRef, {
+            role: 'ADMIN',
+            emailVerified: true,
+            updatedAt: serverTimestamp(),
+          });
+          existingProfile = { ...existingProfile, role: 'ADMIN', emailVerified: true };
+        }
+
+        // Sync published websites to Express edge router in background
+        syncUserPublishedWebsitesToEdge(uid).catch(() => {});
+
+        return { profile: existingProfile, wallet: existingWallet };
+      }
+
+      // Generate clean unique username
+      const rawBase =
+        preferredUsername ||
+        firebaseUser.email?.split('@')[0] ||
+        firebaseUser.displayName ||
+        `user_${uid.slice(0, 6)}`;
+      let cleanUsername = rawBase
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '')
+        .slice(0, 24);
+      if (cleanUsername.length < 3) {
+        cleanUsername = `user_${uid.slice(0, 6).toLowerCase()}`;
+      }
+
+      const bonusCoins = settings.registrationBonusCoins ?? 100;
+      const txId = generateId('tx_reg');
+      const txRef = doc(db, 'coin_transactions', txId);
+
+      const newProfile: Omit<UserProfile, 'createdAt' | 'updatedAt'> = {
+        uid,
+        username: cleanUsername,
+        email: (firebaseUser.email || 'user@prachurjohost.com').slice(0, 254),
+        displayName: (firebaseUser.displayName || cleanUsername).slice(0, 80),
+        photoURL: (firebaseUser.photoURL || '').slice(0, 500),
+        role: isBootstrapAdmin ? 'ADMIN' : 'USER',
+        status: 'ACTIVE',
+        storageQuotaBytes: settings.defaultStorageQuotaBytes || 52428800,
+        storageUsedBytes: 0,
+        twoFactorEnabled: false,
+        emailVerified: Boolean(firebaseUser.emailVerified),
+      };
+
+      const newWallet: Omit<CoinWallet, 'updatedAt'> = {
+        userId: uid,
+        balance: bonusCoins,
+        totalEarned: bonusCoins,
+        totalSpent: 0,
+        lastDailyRewardAt: '',
+      };
+
+      await runTransaction(db, async (transaction) => {
+        // CRITICAL: Execute ALL reads before ANY writes in Firestore transactions
+        const [uCheck, wCheck] = await Promise.all([
+          transaction.get(userRef),
+          transaction.get(walletRef),
+        ]);
+
+        if (!uCheck.exists()) {
+          transaction.set(userRef, {
+            ...newProfile,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } else if (isBootstrapAdmin && uCheck.data()?.role !== 'ADMIN') {
+          transaction.update(userRef, {
+            role: 'ADMIN',
+            emailVerified: true,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        if (!wCheck.exists()) {
+          transaction.set(walletRef, {
+            ...newWallet,
+            updatedAt: serverTimestamp(),
+          });
+          transaction.set(txRef, {
+            id: txId,
+            userId: uid,
+            amount: bonusCoins,
+            balanceAfter: bonusCoins,
+            transactionType: 'REGISTRATION_BONUS',
+            referenceId: uid,
+            idempotencyKey: `reg_bonus_${uid}`,
+            description: `Welcome registration bonus (+${bonusCoins} coins)`,
+            createdAt: serverTimestamp(),
+          });
+        }
+      });
+
+      // If bootstrap admin and global settings not yet persisted, initialize global settings & starter promo codes
+      if (isBootstrapAdmin) {
+        try {
+          const settingsRef = doc(db, 'platform_settings', 'global');
+          const settingsSnap = await getDoc(settingsRef);
+          if (!settingsSnap.exists()) {
+            await setDoc(settingsRef, {
+              ...DEFAULT_PLATFORM_SETTINGS,
+              updatedAt: serverTimestamp(),
+            });
+          }
+          const starterPromoRef = doc(db, 'redeem_codes', 'code_welcome2026');
+          const starterPromoSnap = await getDoc(starterPromoRef);
+          if (!starterPromoSnap.exists()) {
+            await setDoc(starterPromoRef, {
+              id: 'code_welcome2026',
+              code: 'WELCOME2026',
+              codeHash: simpleCodeHash('WELCOME2026'),
+              coinAmount: 100,
+              maxRedemptions: 500,
+              perUserLimit: 1,
+              currentRedemptions: 0,
+              expiresAt: '2027-12-31T23:59:59.000Z',
+              isActive: true,
+              createdAt: serverTimestamp(),
+            });
+          }
+        } catch (seedErr) {
+          console.warn('Non-fatal bootstrap seed warning:', seedErr);
+        }
+      }
+
+      await createNotificationRecord(
+        uid,
+        'Welcome to Prachurjo Host',
+        `Your account is active and credited with ${bonusCoins} registration bonus coins.`,
+        'WALLET'
+      );
+
+      const [finalUser, finalWallet] = await Promise.all([getDoc(userRef), getDoc(walletRef)]);
+      return {
+        profile: (finalUser.data() as UserProfile) || ({ ...newProfile, createdAt: null, updatedAt: null } as UserProfile),
+        wallet: (finalWallet.data() as CoinWallet) || ({ ...newWallet, updatedAt: null } as CoinWallet),
+      };
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${uid}`);
+    } finally {
+      inFlightUserInit.delete(uid);
+    }
+  })();
+
+  inFlightUserInit.set(uid, initPromise);
+  return initPromise;
 }
 
 export async function syncPublishedWebsiteToEdge(website: Website, files: StorageObject[], customHostnames: string[] = []) {
@@ -275,13 +328,17 @@ export async function syncUserPublishedWebsitesToEdge(userId: string) {
       if (site.status === 'PUBLISHED' && site.publishedVersionId) {
         const filesQ = query(
           collection(db, 'storage_objects'),
-          where('websiteId', '==', site.id),
-          where('isPublic', '==', true)
+          where('userId', '==', userId)
         );
         const filesSnap = await getDocs(filesQ);
         const publishedFiles = filesSnap.docs
           .map((d) => d.data() as StorageObject)
-          .filter((f) => f.versionId === site.publishedVersionId);
+          .filter(
+            (f) =>
+              f.websiteId === site.id &&
+              f.isPublic === true &&
+              f.versionId === site.publishedVersionId
+          );
         if (publishedFiles.length > 0) {
           await syncPublishedWebsiteToEdge(site, publishedFiles);
         }
@@ -419,13 +476,12 @@ export async function getDraftFilesForWebsite(userId: string, websiteId: string)
   try {
     const q = query(
       collection(db, 'storage_objects'),
-      where('userId', '==', userId),
-      where('websiteId', '==', websiteId)
+      where('userId', '==', userId)
     );
     const snap = await getDocs(q);
     return snap.docs
       .map((d) => d.data() as StorageObject)
-      .filter((f) => f.versionId === 'draft')
+      .filter((f) => f.websiteId === websiteId && f.versionId === 'draft')
       .sort((a, b) => {
         if (a.fileName === 'index.html') return -1;
         if (b.fileName === 'index.html') return 1;
@@ -887,19 +943,18 @@ async function refundFailedPublishIfCharged(
   try {
     const q = query(
       collection(db, 'coin_transactions'),
-      where('userId', '==', userId),
-      where('idempotencyKey', '==', originalIdempotencyKey)
+      where('userId', '==', userId)
     );
     const snap = await getDocs(q);
-    if (snap.empty) return; // Never charged
-
-    const refQ = query(
-      collection(db, 'coin_transactions'),
-      where('userId', '==', userId),
-      where('idempotencyKey', '==', refundKey)
+    const hasOriginalCharge = snap.docs.some(
+      (d) => (d.data() as CoinTransaction).idempotencyKey === originalIdempotencyKey
     );
-    const refSnap = await getDocs(refQ);
-    if (!refSnap.empty) return; // Already refunded once
+    if (!hasOriginalCharge) return; // Never charged
+
+    const alreadyRefunded = snap.docs.some(
+      (d) => (d.data() as CoinTransaction).idempotencyKey === refundKey
+    );
+    if (alreadyRefunded) return; // Already refunded once
 
     await runTransaction(db, async (transaction) => {
       const wSnap = await transaction.get(walletRef);
@@ -957,12 +1012,13 @@ export async function deleteWebsiteProject(profile: UserProfile, website: Websit
   try {
     const filesQ = query(
       collection(db, 'storage_objects'),
-      where('userId', '==', profile.uid),
-      where('websiteId', '==', website.id)
+      where('userId', '==', profile.uid)
     );
     const filesSnap = await getDocs(filesQ);
     const batch = writeBatch(db);
-    filesSnap.docs.forEach((d) => batch.delete(d.ref));
+    filesSnap.docs
+      .filter((d) => (d.data() as StorageObject).websiteId === website.id)
+      .forEach((d) => batch.delete(d.ref));
     batch.delete(doc(db, 'websites', website.id));
     batch.update(doc(db, 'users', profile.uid), {
       storageUsedBytes: Math.max(0, profile.storageUsedBytes - website.storageBytes),
